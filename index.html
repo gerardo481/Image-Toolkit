@@ -1004,7 +1004,7 @@
       <div class="setting-label">Auto-Process on Upload</div>
       <div class="toggle-row">
         <label class="toggle">
-          <input type="checkbox" id="autoProcessToggle" checked>
+          <input type="checkbox" id="autoProcessToggle">
           <span class="toggle-slider"></span>
         </label>
         <span class="toggle-label">Full pipeline on drop</span>
@@ -1044,7 +1044,8 @@
     <div class="action-bar" id="actionBar">
       <button class="btn btn-primary" id="convertBtn">⚡ Convert &amp; Process</button>
       <button class="btn btn-secondary" id="removeBgBtn">✂ Remove Background</button>
-      <button class="btn btn-secondary" id="imgurBtn">☁ Upload to Imgur &amp; Get URLs</button>
+      <button class="btn btn-secondary" id="imgurRawBtn">☁ Upload to Imgur (As-Is)</button>
+      <button class="btn btn-secondary" id="imgurBtn">☁ Upload to Imgur (Processed)</button>
       <button class="btn btn-danger" id="clearBtn">🗑 Clear All</button>
     </div>
   </div>
@@ -1124,6 +1125,7 @@
 
 <script>
   const imgurBtn = document.getElementById('imgurBtn');
+  const imgurRawBtn = document.getElementById('imgurRawBtn');
   const removeBgBtn = document.getElementById('removeBgBtn');
   const removeBgSection = document.getElementById('removeBgSection');
   const removeBgProgressWrap = document.getElementById('removeBgProgressWrap');
@@ -1175,6 +1177,8 @@
     const auto = document.getElementById('autoProcessToggle').checked;
     document.getElementById('convertBtn').style.display = auto ? 'none' : '';
     document.getElementById('removeBgBtn').style.display = auto ? 'none' : '';
+    // Raw upload always visible; processed upload only shown when convertedBlobs exist
+    document.getElementById('imgurBtn').style.display = convertedBlobs.length > 0 ? '' : 'none';
   }
 
   document.getElementById('autoProcessToggle').addEventListener('change', updateActionBar);
@@ -1439,6 +1443,7 @@
     renderSteps(5);
     statusDetail.textContent = `✓ ${convertedBlobs.length} of ${newFiles.length} images completed.`;
     showStatus(`✓ ${convertedBlobs.length} image${convertedBlobs.length !== 1 ? 's' : ''} auto-processed successfully.`, 'success');
+    updateActionBar();
 
     if (ebayLinks.length > 0) {
       ebayOutput.value = ebayLinks.join('\n');
@@ -1578,6 +1583,7 @@
     downloadSection.style.display = 'none';
     ebaySection.style.display = 'none';
     hideStatus();
+    updateActionBar();
   });
 
   convertBtn.addEventListener('click', async () => {
@@ -1637,6 +1643,7 @@
     convertBtn.disabled = false;
     convertBtn.textContent = '⚡ Convert & Process';
     showStatus(`✓ ${convertedBlobs.length} image${convertedBlobs.length !== 1 ? 's' : ''} converted successfully.`, 'success');
+    updateActionBar();
 
     if (ebayLinks.length > 0) {
       ebayOutput.value = ebayLinks.join('\n');
@@ -1735,6 +1742,77 @@
       img.src = url;
     });
   }
+
+  // Imgur Raw Upload (no pipeline — just rename and upload as-is)
+  imgurRawBtn.addEventListener('click', async () => {
+    if (files.length === 0) { showStatus('No images loaded. Please add images first.', 'error'); return; }
+
+    imgurRawBtn.disabled = true;
+    imgurRawBtn.textContent = 'Uploading…';
+    imgurSection.style.display = 'block';
+    imgurOutput.value = '';
+    imgurStatus.textContent = 'Uploading originals (no processing)…';
+    imgurProgressWrap.style.display = 'block';
+    imgurProgressBar.style.width = '0%';
+
+    imgurUrls = [];
+    imgurOutNames = [];
+    const errors = [];
+
+    const renameOn = document.getElementById('renameToggle').checked;
+    const prefix = document.getElementById('renamePrefix').value.trim() || 'image';
+    const startNum = parseInt(document.getElementById('startNum').value) || 1;
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const seqNum = String(startNum + i).padStart(3, '0');
+      const ext = file.name.split('.').pop().toLowerCase();
+      const outName = renameOn ? `${prefix}-${seqNum}.${ext}` : file.name;
+
+      imgurStatus.textContent = `Uploading ${i + 1} of ${files.length}: ${outName}`;
+
+      try {
+        const base64 = await blobToBase64(file);
+        const imgData = base64.split(',')[1];
+
+        const res = await fetch('https://api.imgur.com/3/image', {
+          method: 'POST',
+          headers: {
+            'Authorization': 'Client-ID 546c25a59c58ad7',
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ image: imgData, type: 'base64', name: outName })
+        });
+
+        const json = await res.json();
+        if (json.success) {
+          imgurUrls.push(json.data.link);
+          imgurOutNames.push(outName);
+        } else {
+          errors.push(`${outName}: Upload failed`);
+        }
+      } catch (err) {
+        errors.push(`${outName}: ${err.message}`);
+      }
+
+      imgurProgressBar.style.width = `${Math.round(((i + 1) / files.length) * 100)}%`;
+    }
+
+    const pairedLines = imgurOutNames.map((name, i) => `${name}  →  ${imgurUrls[i]}`);
+    imgurOutput.value = pairedLines.join('\n');
+    if (errors.length) imgurOutput.value += '\n\nFAILED:\n' + errors.join('\n');
+
+    imgurRawBtn.disabled = false;
+    imgurRawBtn.textContent = '☁ Upload to Imgur (As-Is)';
+    imgurStatus.textContent = `✓ ${imgurUrls.length} uploaded (originals)${errors.length ? ` · ${errors.length} failed` : ''}`;
+    setTimeout(() => { imgurProgressWrap.style.display = 'none'; }, 600);
+
+    if (imgurUrls.length > 0) {
+      const batchName = `${prefix} — ${imgurUrls.length} image${imgurUrls.length !== 1 ? 's' : ''} (original)`;
+      const entries = imgurOutNames.map((name, i) => ({ filename: name, url: imgurUrls[i] }));
+      addBatchToLibrary(batchName, entries);
+    }
+  });
 
   // Imgur Upload
   imgurBtn.addEventListener('click', async () => {
